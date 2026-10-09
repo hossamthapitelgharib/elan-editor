@@ -1,4 +1,4 @@
-/* Élan Scents — editor API (ONE function: Vercel Hobby allows 12, so every editor action lives here).
+/* Élan Scents — editor API (runs on Railway as a plain Node service).
    Admin only. Writes exactly one file (design/home.json) with one commit per save.
    Repo, path and branch come from server configuration, never from the request. */
 const crypto = require('crypto');
@@ -20,22 +20,20 @@ function gitBlobSha(text) {
   return crypto.createHash('sha1').update(Buffer.concat([Buffer.from('blob ' + bytes.length + '\0'), bytes])).digest('hex');
 }
 
-/* Production writes to main. A preview deployment writes ONLY to the branch it was built from,
-   so testing the editor can never touch production. */
+/* Everything comes from environment variables set in Railway, never from the request.
+   Default target is the safe branch `editor-staging`. Writing to `main` needs an explicit second switch. */
 function config(env) {
   env = env || process.env;
-  const isProd = env.VERCEL_ENV === 'production' || env.EDITOR_ENV === 'production';
   const token = env.GITHUB_TOKEN;
   const repo = env.GITHUB_REPO || DEFAULT_REPO;
-  const branch = env.EDITOR_TARGET_BRANCH || (isProd ? 'main' : env.VERCEL_GIT_COMMIT_REF);
-  const host = isProd ? env.VERCEL_PROJECT_PRODUCTION_URL : env.VERCEL_BRANCH_URL;
-  const origin = env.EDITOR_SITE_ORIGIN || (host ? 'https://' + host : '');
-  if (!token || !branch || !origin) return { error: 'editor_not_configured' };
+  const branch = env.EDITOR_TARGET_BRANCH || 'editor-staging';
+  const origin = (env.EDITOR_SITE_ORIGIN || '').replace(/\/+$/, '');
+  if (!token || !origin) return { error: 'editor_not_configured' };
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) return { error: 'editor_not_configured' };
   if (!/^[\w./-]{1,100}$/.test(branch) || branch.indexOf('..') !== -1) return { error: 'editor_not_configured' };
-  if (!/^https:\/\/[\w.-]+(:\d+)?$/.test(origin.replace(/\/+$/, ''))) return { error: 'editor_not_configured' };
-  if (branch === 'main' && !isProd && env.EDITOR_ALLOW_MAIN_FROM_PREVIEW !== '1') return { error: 'preview_cannot_write_main' };
-  return { token, repo, branch, origin: origin.replace(/\/+$/, ''), isProd };
+  if (!/^https:\/\/[\w.-]+(:\d+)?$/.test(origin)) return { error: 'editor_not_configured' };
+  if (branch === 'main' && env.EDITOR_ALLOW_MAIN !== '1') return { error: 'main_not_allowed' };
+  return { token, repo, branch, origin };
 }
 
 async function github(cfg, method, path, body) {
@@ -74,6 +72,10 @@ function parseBody(req) {
 
 async function actionState(cfg) {
   const file = await readDesignFile(cfg);
+  if (!file.exists) {
+    const br = await github(cfg, 'GET', '/branches/' + encodeURIComponent(cfg.branch));
+    if (br.status === 404) return { status: 502, body: { ok: false, error: 'branch_not_found', branch: cfg.branch } };
+  }
   if (!file.exists) return { status: 200, body: { ok: true, revision: null, design: ED.normalize({ version: ED.VERSION }).design, branch: cfg.branch } };
   let parsed = null;
   try { parsed = JSON.parse(file.text); } catch (_) { /* reported below */ }
@@ -120,6 +122,7 @@ async function actionSave(cfg, body) {
     return { status: 200, body: { ok: true, committed: true, revision, commit: put.json.commit && put.json.commit.sha, branch: cfg.branch } };
   }
   if (put.status === 401 || put.status === 403) return { status: 502, body: { ok: false, error: 'github_auth_failed' } };
+  if (put.status === 404) return { status: 502, body: { ok: false, error: 'branch_not_found', branch: cfg.branch } };
   if (put.status === 409 || put.status === 422) {
     // Someone changed the file between our read and write, or our own earlier attempt landed. Re-check, never overwrite.
     const again = await readDesignFile(cfg);

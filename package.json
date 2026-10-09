@@ -1,8 +1,11 @@
 {
-  "name": "elan-editor-server",
+  "name": "elan-editor",
   "private": true,
   "version": "1.0.0",
-  "main": "server.js",
-  "scripts": { "start": "node server.js", "test": "node --test tests/*.test.js" },
+  "description": "Élan Scents visual editor (runs on Railway)",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js"
+  },
   "engines": { "node": ">=20" }
 }
