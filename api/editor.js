@@ -24,7 +24,7 @@ function gitBlobSha(text) {
    so testing the editor can never touch production. */
 function config(env) {
   env = env || process.env;
-  const isProd = env.VERCEL_ENV === 'production';
+  const isProd = env.VERCEL_ENV === 'production' || env.EDITOR_ENV === 'production';
   const token = env.GITHUB_TOKEN;
   const repo = env.GITHUB_REPO || DEFAULT_REPO;
   const branch = env.EDITOR_TARGET_BRANCH || (isProd ? 'main' : env.VERCEL_GIT_COMMIT_REF);
