@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const handler = require('../api/editor.js');
+const handler = require('../railway/editor.js');
 const ED = require('../design-schema.js');
 
 const { gitBlobSha } = handler.internals;
@@ -13,7 +13,7 @@ const sha40 = (c) => c.repeat(40);
 function envFor(extra) {
   return Object.assign({
     SUPABASE_URL: SB, SUPABASE_SERVICE_ROLE_KEY: 'service', GITHUB_TOKEN: 'ghp_test',
-    EDITOR_TARGET_BRANCH: 'editor-staging', EDITOR_SITE_ORIGIN: 'https://elan-git-editor-staging.vercel.app'
+    VERCEL_ENV: 'preview', VERCEL_GIT_COMMIT_REF: 'editor-v1', VERCEL_BRANCH_URL: 'elan-git-editor-v1.vercel.app'
   }, extra || {});
 }
 
@@ -43,7 +43,7 @@ async function run({ method = 'POST', body, query, role = 'platform_admin', toke
   const savedEnv = {};
   const e = envFor(env);
   Object.keys(e).forEach((k) => { savedEnv[k] = process.env[k]; process.env[k] = e[k]; });
-  ['GITHUB_TOKEN', 'EDITOR_TARGET_BRANCH', 'EDITOR_SITE_ORIGIN', 'EDITOR_ALLOW_MAIN', 'GITHUB_REPO'].forEach((k) => { if (!(k in e)) { savedEnv[k] = process.env[k]; delete process.env[k]; } });
+  ['GITHUB_TOKEN', 'VERCEL_ENV', 'VERCEL_GIT_COMMIT_REF', 'VERCEL_BRANCH_URL', 'EDITOR_TARGET_BRANCH', 'EDITOR_SITE_ORIGIN'].forEach((k) => { if (!(k in e)) { savedEnv[k] = process.env[k]; delete process.env[k]; } });
   const realFetch = global.fetch;
   const siteCalls = [];
   global.fetch = async (url, opts) => {
@@ -67,9 +67,10 @@ async function run({ method = 'POST', body, query, role = 'platform_admin', toke
 const goodDesign = () => ({ version: 1, sections: { offers: { hidden: true } }, order: [], blocks: [], texts: {} });
 const saveBody = (over) => Object.assign({ action: 'save', design: goodDesign(), expectedRevision: gitBlobSha(EMPTY), requestId: 'req-12345678' }, over || {});
 
-test('the editor service exposes its handler and a health-checked server', () => {
-  assert.equal(typeof handler, 'function');
-  assert.ok(fs.existsSync(path.join(__dirname, '..', 'server.js')));
+test('the editor handler lives in railway/ and never adds a Vercel function', () => {
+  const files = fs.readdirSync(path.join(__dirname, '..', 'api'));
+  assert.ok(!files.includes('editor.js'));
+  assert.ok(fs.existsSync(path.join(__dirname, '..', 'railway', 'editor.js')));
 });
 
 test('git blob hashing matches git itself', () => {
@@ -99,16 +100,16 @@ test('refuses to run when GitHub is not configured', async () => {
   assert.equal(r.res.body.error, 'editor_not_configured');
 });
 
-test('writing to main is blocked unless explicitly allowed; default branch is editor-staging', async () => {
+test('a preview can never write to main, and production writes to main', async () => {
   const gh = fakeGithub(EMPTY);
-  const bad = await run({ method: 'GET', env: { EDITOR_TARGET_BRANCH: 'main' }, github: gh });
+  const bad = await run({ method: 'GET', env: { VERCEL_GIT_COMMIT_REF: 'main' }, github: gh });
   assert.equal(bad.res.statusCode, 503);
-  assert.equal(bad.res.body.error, 'main_not_allowed');
-  const ok = await run({ method: 'GET', env: { EDITOR_TARGET_BRANCH: 'main', EDITOR_ALLOW_MAIN: '1' }, github: gh });
-  assert.equal(ok.res.statusCode, 200);
-  assert.equal(ok.res.body.branch, 'main');
-  const dflt = await run({ method: 'GET', env: { EDITOR_TARGET_BRANCH: '' }, github: gh });
-  assert.equal(dflt.res.body.branch, 'editor-staging');
+  assert.equal(bad.res.body.error, 'preview_cannot_write_main');
+  const prod = await run({ method: 'GET', env: { VERCEL_ENV: 'production', VERCEL_PROJECT_PRODUCTION_URL: 'elan.example.test' }, github: gh });
+  assert.equal(prod.res.statusCode, 200);
+  assert.equal(prod.res.body.branch, 'main');
+  const preview = await run({ method: 'GET', github: gh });
+  assert.equal(preview.res.body.branch, 'editor-v1');
 });
 
 test('state returns the committed design and its revision', async () => {
@@ -129,7 +130,7 @@ test('save commits exactly one file, on the configured branch, with the expected
   assert.equal(gh.puts.length, 1);
   const put = gh.puts[0];
   assert.match(put.url, /\/repos\/hossamthapitelgharib\/elan-scents\/contents\/design\/home\.json$/);
-  assert.equal(put.body.branch, 'editor-staging');
+  assert.equal(put.body.branch, 'editor-v1');
   assert.equal(put.body.sha, gitBlobSha(EMPTY));
   assert.equal(Buffer.from(put.body.content, 'base64').toString('utf8'), ED.serialize(goodDesign()));
   assert.equal(r.res.body.revision, gitBlobSha(ED.serialize(goodDesign())));
@@ -207,7 +208,7 @@ test('status reports published only when the live site serves the committed byte
   const gh = fakeGithub(text);
   const live = await run({ body: { action: 'status', revision: rev }, github: gh, live: () => ({ status: 200, text }) });
   assert.equal(live.res.body.published, true);
-  assert.match(live.siteCalls[0], /^https:\/\/elan-git-editor-staging\.vercel\.app\/design\/home\.json\?cb=/);
+  assert.match(live.siteCalls[0], /^https:\/\/elan-git-editor-v1\.vercel\.app\/design\/home\.json\?cb=/);
   const old = await run({ body: { action: 'status', revision: rev }, github: gh, live: () => ({ status: 200, text: EMPTY }) });
   assert.equal(old.res.body.published, false);
   const down = await run({ body: { action: 'status', revision: rev }, github: gh, live: () => ({ status: 503, text: '' }) });
