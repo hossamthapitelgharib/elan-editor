@@ -8,6 +8,13 @@ const root = path.join(__dirname, '..');
 const MEDIA = 'https://sbgdtuqfrnfeggkwqtrw.supabase.co/storage/v1/object/public/site-media/a1b2.webp';
 const base = () => ({ version: 1, sections: {}, order: [], blocks: [], texts: {} });
 
+test('the committed design file is valid and empty, so the page is unchanged', () => {
+  const file = JSON.parse(fs.readFileSync(path.join(root, 'design', 'home.json'), 'utf8'));
+  const n = ED.normalize(file, { strict: true });
+  assert.equal(n.ok, true, n.errors.join('; '));
+  assert.equal(ED.isEmpty(n.design), true);
+});
+
 test('an empty design produces an empty plan (zero DOM changes)', () => {
   const p = ED.plan(base(), ED.BUILTIN.slice(), 'ar');
   assert.deepEqual(p, { hide: [], titles: {}, blocks: [], order: [] });
@@ -108,3 +115,31 @@ test('applyTexts only touches whitelisted keys', () => {
   assert.equal(texts.en.magic, 'old');
 });
 
+test('the storefront loads the design layer after the core and keeps the cache-busting version', () => {
+  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  const v = html.match(/\/app\.js\?v=([\w-]+)/)[1];
+  assert.match(html, new RegExp('/design-schema\\.js\\?v=' + v));
+  assert.match(html, new RegExp('/design-layer\\.js\\?v=' + v));
+  assert.ok(html.indexOf('/design-layer.js') > html.indexOf('/design-schema.js'));
+  assert.ok(html.indexOf('/design-schema.js') > html.indexOf('/app.js'));
+});
+
+test('design files are served without caching', () => {
+  const cfg = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8'));
+  const noStore = (src) => cfg.headers.some((h) => h.source === src && h.headers.some((x) => /no-store/.test(x.value)));
+  assert.ok(noStore('/design/(.*)'));
+  assert.ok(cfg.headers.some((h) => /design-layer\.js/.test(h.source) && /design-schema\.js/.test(h.source)));
+});
+
+test('inner pages accept blocks only for known page keys and keep ids unique across the site', () => {
+  const ok = 'https://sbgdtuqfrnfeggkwqtrw.supabase.co/storage/v1/object/public/site-media/u/a.png';
+  const good = ED.normalize({ version: 1, pages: { 'sec:brands': { blocks: [{ id: 'x-a', type: 'text', text: { ar: 'م' }, slot: 'bottom' }, { id: 'x-b', type: 'banner', title: { ar: 't' }, image: ok }] }, 'brand:Dior': { blocks: [{ id: 'x-c', type: 'text', text: { en: 'hi' } }] } } }, { strict: true });
+  assert.ok(good.ok, JSON.stringify(good.errors));
+  assert.deepEqual(good.design.pages['sec:brands'].blocks.map((b) => b.slot), ['bottom', 'top']);
+  assert.equal(ED.isEmpty(good.design), false);
+  assert.equal(ED.normalize({ version: 1, pages: { 'evil:x': { blocks: [] } } }, { strict: true }).ok, false);
+  assert.equal(ED.normalize({ version: 1, pages: { 'sec:all': { blocks: [{ id: 'x-a', type: 'text', text: { ar: 'a' } }] } }, blocks: [{ id: 'x-a', type: 'text', text: { ar: 'b' } }] }, { strict: true }).ok, false);
+  assert.ok(ED.isPageKey('col:cats:3'));
+  assert.equal(ED.isPageKey('sec:nope'), false);
+  assert.equal(ED.normalize({ version: 1 }, { strict: true }).design.pages, undefined);
+});
