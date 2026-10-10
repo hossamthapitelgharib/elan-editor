@@ -7,6 +7,7 @@
   if (!ED) return;
 
   var design = null;
+  var editing = false;
   var STYLE_ID = 'elan-design-style';
   var CSS = [
     '.elan-block{max-width:900px;margin:18px auto;padding:0 16px;box-sizing:border-box}',
@@ -88,8 +89,8 @@
     var plan = ED.plan(design, present, lang());
 
     plan.hide.forEach(function (id) {
-      nodes[id].style.display = 'none';
       nodes[id].setAttribute('data-elan-hidden', '1');
+      if (editing) nodes[id].style.opacity = '.4'; else nodes[id].style.display = 'none';
     });
     Object.keys(plan.titles).forEach(function (id) {
       var h = nodes[id].querySelector('h3');
@@ -132,7 +133,20 @@
     if (typeof window.render === 'function') window.render();
   }
 
-  window.ElanDesignLayer = { apply: apply, current: function () { return design; } };
+  // Used only by the editor's edit mode: swap in a draft design and redraw. Customers never call this.
+  function set(json, opts) {
+    var n = ED.normalize(json, { strict: false });
+    if (!n.ok) return false;
+    editing = !!(opts && opts.editing);
+    design = n.design;
+    ensureStyle();
+    if (typeof D === 'object' && D) ED.applyTexts(D, design);
+    wrapRender();
+    if (typeof window.render === 'function') window.render();
+    return true;
+  }
+
+  window.ElanDesignLayer = { apply: apply, set: set, current: function () { return design; } };
 
   fetch('/design/home.json', { cache: 'no-store' })
     .then(function (r) { return r.ok ? r.json() : null; })
